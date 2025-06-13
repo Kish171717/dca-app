@@ -16,6 +16,8 @@ st.markdown("- **Oil m3** (Cumulative Oil)")
 
 uploaded_file = st.file_uploader("Upload your well production Excel file", type=["xlsx"])
 
+forecast_years = st.slider("📆 Forecast Duration (Years)", min_value=1, max_value=30, value=15)
+
 if uploaded_file:
     try:
         df = pd.read_excel(uploaded_file)
@@ -85,14 +87,17 @@ if uploaded_file:
                     forecast_func = lambda x: exponential(x, *popt)
 
                 # Forecast for 15 years
-                full_days = np.arange(0, int(15 * 365.25))
+                full_days = np.arange(0, int(forecast_years * 365.25))
                 full_years = full_days / 365.25
                 forecast_values = forecast_func(full_years)
                 cum_forecast = np.cumsum(forecast_values)
                 EUR_limit = eur * 1e6
                 stop_mask = (forecast_values < cutoff) | (cum_forecast > EUR_limit)
                 stop_mask &= (full_years > t[-1])
-                cutoff_idx = np.argmax(stop_mask)
+                if not stop_mask.any():
+                cutoff_idx = len(full_days)
+                else:
+                    cutoff_idx = np.argmax(stop_mask)
                 if cutoff_idx == 0:
                     cutoff_idx = len(full_days)
 
