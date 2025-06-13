@@ -113,9 +113,6 @@ if uploaded_file:
                                    hovermode='closest')
                 st.plotly_chart(fig2, use_container_width=True)
 
-                df_export = pd.merge_asof(
-    df[['Days', 'Qo (m3/day)', 'CumOil (m3)', 'Month']],
-    forecast_df[['Days']], on='Days', direction='nearest')
 
 df_export = pd.merge_asof(
     df[['Days', 'Qo (m3/day)', 'CumOil (m3)', 'Month']],
