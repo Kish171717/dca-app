@@ -93,7 +93,6 @@ if uploaded_file:
                     cutoff_idx = len(full_days)
 
                 forecast_df = pd.DataFrame({
-                    'Cumulative Forecast': cum_forecast[:cutoff_idx],
                     'Days': df_filtered['Days'].values[0] + full_days[:cutoff_idx],
                     f'{model_type} Forecast': forecast_values[:cutoff_idx]
                 })
@@ -113,13 +112,7 @@ if uploaded_file:
                                    hovermode='closest')
                 st.plotly_chart(fig2, use_container_width=True)
 
-                try:
-    df_export = pd.merge_asof(
-        df[['Days', 'Qo (m3/day)', 'CumOil (m3)', 'Month']],
-        forecast_df[['Days']], on='Days', direction='nearest')
-    df_export = pd.merge(df_export, forecast_df, on='Days', how='left')
-except Exception as e:
-    st.error(f"Export failed: {e}")
+                df_export = pd.merge_asof(df[['Days', 'Qo (m3/day)', 'CumOil (m3)', 'Month']],
                                           forecast_df, on='Days', direction='nearest')
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
