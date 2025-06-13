@@ -66,16 +66,26 @@ if uploaded_file:
 
         t = (hist['Days'] - hist['Days'].iloc[0]) / 365.25
         q = hist['Qo'].values
-        qi = q[0]
-        D_init = decline_pct / 100
+
+        # Filter out zero and NaN entries
+        valid_mask = (q > 0) & (~np.isnan(q))
+        t = t[valid_mask]
+        q = q[valid_mask]
+
+        if len(q) < 5:
+            st.warning("Too few valid data points after filtering. Adjust inputs.")
+            st.stop()
+
+        qi = np.nanmax(q[:5])
+        D_init = max(decline_pct / 100, 0.01)
 
         try:
             if model_type == "Hyperbolic":
-                popt, _ = curve_fit(lambda t, D: hyperbolic(t, qi, D, b_val), t, q, p0=[D_init], bounds=([1e-6], [1.0]), maxfev=10000)
+                popt, _ = curve_fit(lambda t, D: hyperbolic(t, qi, D, b_val), t, q, p0=[D_init], bounds=([1e-5], [1.0]), maxfev=20000)
                 D_fit = popt[0]
                 forecast_func = lambda t: hyperbolic(t, qi, D_fit, b_val)
             else:
-                popt, _ = curve_fit(lambda t, D: exponential(t, qi, D), t, q, p0=[D_init], bounds=([1e-6], [1.0]), maxfev=10000)
+                popt, _ = curve_fit(lambda t, D: exponential(t, qi, D), t, q, p0=[D_init], bounds=([1e-5], [1.0]), maxfev=20000)
                 D_fit = popt[0]
                 forecast_func = lambda t: exponential(t, qi, D_fit)
         except Exception as e:
@@ -89,7 +99,7 @@ if uploaded_file:
         EUR_limit = eur * 1e6
 
         stop_mask = (forecast_values < cutoff) | (cum_forecast > EUR_limit)
-        stop_mask &= (full_years > t.iloc[-1])
+        stop_mask &= (full_years > t[-1])
         cutoff_idx = np.argmax(stop_mask) if stop_mask.any() else len(full_days)
 
         forecast_days = full_days[:cutoff_idx]
