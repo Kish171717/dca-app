@@ -43,7 +43,7 @@ if uploaded_file:
         eur = st.number_input("Estimated Ultimate Recovery (EUR) in million m³", value=86.0)
         decline_pct = st.slider("Decline Rate (%)", min_value=0.1, max_value=100.0, step=0.1, value=14.0)
         cutoff = st.number_input("Cutoff Rate (m³/day)", min_value=0.1, max_value=100.0, step=0.1, value=0.5)
-        model_type = st.radio("Forecast Type", ['Hyperbolic', 'Exponential'])
+        b_val = st.slider("Hyperbolic Exponent (b)", min_value=0.1, max_value=1.0, step=0.01, value=0.5)\n        model_type = st.radio("Forecast Type", ['Hyperbolic', 'Exponential'])
 
         def parse_ignore_input(text):
             ignore = set()
@@ -73,7 +73,7 @@ if uploaded_file:
             decline_rate = decline_pct / 100
             try:
                 if model_type == 'Hyperbolic':
-                    popt, _ = curve_fit(hyperbolic, t, q, p0=[max(q[0], 1), max(decline_rate, 0.001), 0.5],
+                    popt, _ = curve_fit(hyperbolic, t, q, p0=[max(q[0], 1), max(decline_rate, 0.001), b_val],
                                         bounds=([0.1, 0.0001, 0.01], [10000, 1.0, 0.99]), maxfev=10000)
                     forecast_func = lambda x: hyperbolic(x, *popt)
                 else:
