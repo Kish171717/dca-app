@@ -42,6 +42,7 @@ if uploaded_file:
         ignore_days_input = st.text_input("Ignore Days (e.g. 200-220, 250)")
         eur = st.number_input("Estimated Ultimate Recovery (EUR) in million m³", value=86.0)
         decline_pct = st.slider("Decline Rate (%)", min_value=0.1, max_value=100.0, step=0.1, value=14.0)
+        cutoff = st.number_input("Cutoff Rate (m³/day)", min_value=0.1, max_value=100.0, step=0.1, value=0.5)
         model_type = st.radio("Forecast Type", ['Hyperbolic', 'Exponential'])
 
         def parse_ignore_input(text):
@@ -84,7 +85,7 @@ if uploaded_file:
                 forecast_values = forecast_func(full_days)
                 cum_forecast = np.cumsum(forecast_values)
                 EUR_limit = eur * 1e6
-                cutoff_idx = np.argmax((forecast_values < 0.5) | (cum_forecast > EUR_limit))
+                cutoff_idx = np.argmax((forecast_values < cutoff) | (cum_forecast > EUR_limit))
                 if cutoff_idx == 0:
                     cutoff_idx = len(full_days)
 
@@ -99,8 +100,8 @@ if uploaded_file:
                 fig2.add_trace(go.Scatter(x=forecast_df['Days'], y=forecast_df[f'{model_type} Forecast'],
                                           mode='lines', name=f'{model_type} Forecast',
                                           line=dict(color='orange', dash='dash')))
-                fig2.add_trace(go.Scatter(x=[0, forecast_df['Days'].max()], y=[0.5, 0.5],
-                                          mode='lines', name='0.5 m³/day Cutoff',
+                fig2.add_trace(go.Scatter(x=[0, forecast_df['Days'].max()], y=[cutoff, cutoff],
+                                          mode='lines', name=f'{cutoff} m³/day Cutoff',
                                           line=dict(color='red', dash='dot')))
                 fig2.update_layout(title=f'{model_type} Forecast Result',
                                    xaxis_title='Days',
