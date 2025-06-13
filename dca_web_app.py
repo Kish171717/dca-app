@@ -83,7 +83,7 @@ if uploaded_file:
                     forecast_func = lambda x: exponential(x, *popt)
 
                 # Forecast for 15 years
-                full_days = np.arange(0, int(15 * 365.25))
+                full_days = np.arange(0, int(25 * 365.25))
                 full_years = full_days / 365.25
                 forecast_values = forecast_func(full_years)
                 cum_forecast = np.cumsum(forecast_values)
