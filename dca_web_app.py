@@ -70,10 +70,10 @@ if uploaded_file:
             q = df_filtered['Qo (m3/day)'].values
             D_year = decline_pct / 100  # convert to fractional annual rate
 
-            def hyperbolic(t, qi):
+            def hyperbolic(t, qi, D, b):
                 return qi / ((1 + b_val * D_year * t) ** (1 / b_val))
 
-            def exponential(t, qi):
+            def exponential(t, qi, D):
                 return qi * np.exp(-D_year * t)
 
             try:
