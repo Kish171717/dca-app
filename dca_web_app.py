@@ -76,10 +76,12 @@ if uploaded_file:
 
             try:
                 if model_type == 'Hyperbolic':
-                    popt, _ = curve_fit(hyperbolic, t, q, p0=[max(q[0], 1)], bounds=([0.1], [10000]), maxfev=10000)
+                    popt_D, _ = curve_fit(lambda t, D: hyperbolic(t, q[0], D, b_val), t, q, p0=[D_year], bounds=([1e-5], [1.0]), maxfev=10000)
+                    forecast_func = lambda x: hyperbolic(x, q[0], popt_D[0], b_val)
                     forecast_func = lambda x: hyperbolic(x, *popt)
                 else:
-                    popt, _ = curve_fit(exponential, t, q, p0=[max(q[0], 1)], bounds=([0.1], [10000]), maxfev=10000)
+                    popt_D, _ = curve_fit(lambda t, D: exponential(t, q[0], D), t, q, p0=[D_year], bounds=([1e-5], [1.0]), maxfev=10000)
+                    forecast_func = lambda x: exponential(x, q[0], popt_D[0])
                     forecast_func = lambda x: exponential(x, *popt)
 
                 # Forecast for 15 years
@@ -88,7 +90,9 @@ if uploaded_file:
                 forecast_values = forecast_func(full_years)
                 cum_forecast = np.cumsum(forecast_values)
                 EUR_limit = eur * 1e6
-                cutoff_idx = np.argmax((forecast_values < cutoff) | (cum_forecast > EUR_limit))
+                stop_mask = (forecast_values < cutoff) | (cum_forecast > EUR_limit)
+                stop_mask &= (full_years > t[-1])
+                cutoff_idx = np.argmax(stop_mask)
                 if cutoff_idx == 0:
                     cutoff_idx = len(full_days)
 
