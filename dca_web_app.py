@@ -117,8 +117,14 @@ if uploaded_file:
     df[['Days', 'Qo (m3/day)', 'CumOil (m3)', 'Month']],
     forecast_df[['Days']], on='Days', direction='nearest')
 
+df_export = pd.merge_asof(
+    df[['Days', 'Qo (m3/day)', 'CumOil (m3)', 'Month']],
+    forecast_df[['Days']],
+    on='Days',
+    direction='nearest'
+)
 df_export = pd.merge(df_export, forecast_df, on='Days', how='left')
-                                          forecast_df, on='Days', direction='nearest')
+
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     df_export.to_excel(writer, index=False, sheet_name='Forecast')
