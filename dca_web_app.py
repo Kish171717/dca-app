@@ -14,9 +14,9 @@ st.markdown("- **Month** (Date format)")
 st.markdown("- **Oil Production (m3/d)**")
 st.markdown("- **Oil m3** (Cumulative Oil)")
 
-uploaded_file = st.file_uploader("Upload your well production Excel file", type=["xlsx"])
-
 forecast_years = st.slider("📆 Forecast Duration (Years)", min_value=1, max_value=30, value=15)
+
+uploaded_file = st.file_uploader("Upload your well production Excel file", type=["xlsx"])
 
 if uploaded_file:
     try:
@@ -28,7 +28,6 @@ if uploaded_file:
         df['CumOil (m3)'] = df['Oil m3'].cumsum()
         st.success("✅ File loaded successfully!")
 
-        # Plot preview
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df['Days'], y=df['Qo (m3/day)'],
                                  mode='markers+lines', name='Actual Qo',
@@ -65,41 +64,37 @@ if uploaded_file:
             if ignore_days:
                 df_filtered = df_filtered[~df_filtered['Days'].isin(ignore_days)]
 
-            # Convert days to years for proper decline rate handling
             t = (df_filtered['Days'].values - df_filtered['Days'].values[0]) / 365.25
             q = df_filtered['Qo (m3/day)'].values
-            D_year = decline_pct / 100  # convert to fractional annual rate
+            D_year = decline_pct / 100
+            qi = q[0]
 
             def hyperbolic(t, qi, D, b):
-                return qi / ((1 + b_val * D_year * t) ** (1 / b_val))
+                return qi / ((1 + b * D * t) ** (1 / b))
 
             def exponential(t, qi, D):
-                return qi * np.exp(-D_year * t)
+                return qi * np.exp(-D * t)
 
             try:
                 if model_type == 'Hyperbolic':
-                    popt_D, _ = curve_fit(lambda t, D: hyperbolic(t, q[0], D, b_val), t, q, p0=[D_year], bounds=([1e-5], [1.0]), maxfev=10000)
-                    forecast_func = lambda x: hyperbolic(x, q[0], popt_D[0], b_val)
-                    forecast_func = lambda x: hyperbolic(x, *popt)
+                    popt, _ = curve_fit(lambda t, D: hyperbolic(t, qi, D, b_val), t, q, p0=[D_year], bounds=([1e-5], [1.0]), maxfev=10000)
+                    forecast_func = lambda x: hyperbolic(x, qi, popt[0], b_val)
                 else:
-                    popt_D, _ = curve_fit(lambda t, D: exponential(t, q[0], D), t, q, p0=[D_year], bounds=([1e-5], [1.0]), maxfev=10000)
-                    forecast_func = lambda x: exponential(x, q[0], popt_D[0])
-                    forecast_func = lambda x: exponential(x, *popt)
+                    popt, _ = curve_fit(lambda t, D: exponential(t, qi, D), t, q, p0=[D_year], bounds=([1e-5], [1.0]), maxfev=10000)
+                    forecast_func = lambda x: exponential(x, qi, popt[0])
 
-                # Forecast for 15 years
                 full_days = np.arange(0, int(forecast_years * 365.25))
                 full_years = full_days / 365.25
                 forecast_values = forecast_func(full_years)
                 cum_forecast = np.cumsum(forecast_values)
                 EUR_limit = eur * 1e6
+
                 stop_mask = (forecast_values < cutoff) | (cum_forecast > EUR_limit)
                 stop_mask &= (full_years > t[-1])
                 if not stop_mask.any():
                     cutoff_idx = len(full_days)
                 else:
                     cutoff_idx = np.argmax(stop_mask)
-                if cutoff_idx == 0:
-                    cutoff_idx = len(full_days)
 
                 forecast_df = pd.DataFrame({
                     'Days': df_filtered['Days'].values[0] + full_days[:cutoff_idx],
