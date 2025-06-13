@@ -95,7 +95,7 @@ if uploaded_file:
                 stop_mask = (forecast_values < cutoff) | (cum_forecast > EUR_limit)
                 stop_mask &= (full_years > t[-1])
                 if not stop_mask.any():
-                cutoff_idx = len(full_days)
+                    cutoff_idx = len(full_days)
                 else:
                     cutoff_idx = np.argmax(stop_mask)
                 if cutoff_idx == 0:
