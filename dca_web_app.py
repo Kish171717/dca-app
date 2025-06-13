@@ -9,10 +9,12 @@ import io
 st.set_page_config(page_title="DCA Forecast Tool", layout="centered")
 st.title("📉 Decline Curve Analysis (DCA) Forecast Tool – EUR‑Sensitive")
 
-st.markdown("Upload an Excel file with these columns:")
-st.markdown("• **Month** (date)  
+st.markdown("""
+• **Month** (date)  
 • **Oil Production (m3/d)**  
-• **Oil m3** (cumulative)")
+• **Oil m3** (cumulative)
+""")
+
 
 uploaded_file = st.file_uploader("Upload Excel", type=["xlsx"])
 
