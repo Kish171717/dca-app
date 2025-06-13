@@ -43,7 +43,8 @@ if uploaded_file:
         eur = st.number_input("Estimated Ultimate Recovery (EUR) in million m³", value=86.0)
         decline_pct = st.slider("Decline Rate (%)", min_value=0.1, max_value=100.0, step=0.1, value=14.0)
         cutoff = st.number_input("Cutoff Rate (m³/day)", min_value=0.1, max_value=100.0, step=0.1, value=0.5)
-        b_val = st.slider("Hyperbolic Exponent (b)", min_value=0.1, max_value=1.0, step=0.01, value=0.5)       model_type = st.radio("Forecast Type", ['Hyperbolic', 'Exponential'])
+        b_val = st.slider("Hyperbolic Exponent (b)", min_value=0.1, max_value=1.0, step=0.01, value=0.5)
+        model_type = st.radio("Forecast Type", ['Hyperbolic', 'Exponential'])
 
         def parse_ignore_input(text):
             ignore = set()
