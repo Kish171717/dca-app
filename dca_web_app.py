@@ -9,117 +9,118 @@ import io
 st.set_page_config(page_title="DCA Forecast Tool", layout="centered")
 st.title("📉 Decline Curve Analysis (DCA) Forecast Tool")
 
-st.markdown("Upload an Excel file with the following columns:")
-st.markdown("- **Month** (Date format)")
-st.markdown("- **Oil Production (m3/d)**")
-st.markdown("- **Oil m3** (Cumulative Oil)")
+uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
 
-uploaded_file = st.file_uploader("Upload your well production Excel file", type=["xlsx"])
+start_day = st.number_input("Start Forecast From Day", min_value=0, value=0)
+ignore_txt = st.text_input("Ignore Days (e.g. 200-220, 300)")
+eur = st.number_input("EUR (Million m³)", value=86.0, step=1.0)
+cutoff = st.number_input("Cutoff Rate (m³/d)", value=0.5)
+decline_pct = st.slider("Annual Decline Rate (%)", 0.1, 100.0, 14.0, 0.1)
+b_val = st.slider("Hyperbolic Exponent (b)", 0.1, 1.0, 0.5, 0.01)
+model_type = st.radio("Forecast Type", ["Hyperbolic", "Exponential"])
+run_btn = st.button("📈 Analyze & Forecast")
+
+def parse_ignore(s):
+    out = set()
+    for part in s.split(','):
+        part = part.strip()
+        if '-' in part:
+            a, b = map(int, part.split('-'))
+            out.update(range(a, b + 1))
+        elif part.isdigit():
+            out.add(int(part))
+    return list(out)
+
+def hyperbolic(t, qi, D, b):
+    return qi / ((1 + b * D * t) ** (1 / b))
+
+def exponential(t, qi, D):
+    return qi * np.exp(-D * t)
 
 if uploaded_file:
     try:
         df = pd.read_excel(uploaded_file)
-        df['Month'] = pd.to_datetime(df['Month'])
-        df = df.sort_values('Month').reset_index(drop=True)
-        df['Days'] = (df['Month'] - df['Month'].iloc[0]).dt.days
-        df['Qo (m3/day)'] = df['Oil Production (m3/d)']
-        df['CumOil (m3)'] = df['Oil m3'].cumsum()
-        st.success("✅ File loaded successfully!")
+    except Exception as e:
+        st.error(f'Failed to read Excel: {e}')
+        st.stop()
 
-        # Plot preview
+    required = ['Month', 'Oil Production (m3/d)', 'Oil m3']
+    if not all(col in df.columns for col in required):
+        st.error(f'Missing required columns. Found columns: {list(df.columns)}')
+        st.stop()
+
+    df['Month'] = pd.to_datetime(df['Month'])
+    df = df.sort_values('Month').reset_index(drop=True)
+    df['Days'] = (df['Month'] - df['Month'].iloc[0]).dt.days
+    df['Qo'] = df['Oil Production (m3/d)']
+    df['CumOil'] = df['Oil m3'].cumsum()
+
+    st.success("✅ File loaded successfully!")
+    st.plotly_chart(go.Figure(data=go.Scatter(x=df['Days'], y=df['Qo'], mode='markers+lines', name='Actual Qo')).update_layout(title='Actual Production', xaxis_title='Days', yaxis_title='Qo (m³/d)'), use_container_width=True)
+
+    if run_btn:
+        ignore_set = parse_ignore(ignore_txt)
+        hist = df[df['Days'] >= start_day].copy()
+        if ignore_set:
+            hist = hist[~hist['Days'].isin(ignore_set)]
+
+        t = (hist['Days'] - hist['Days'].iloc[0]) / 365.25
+        q = hist['Qo'].values
+
+        # Filter out zero and NaN entries
+        valid_mask = (q > 0) & (~np.isnan(q))
+        t = t[valid_mask]
+        q = q[valid_mask]
+
+        if len(q) < 5:
+            st.warning("Too few valid data points after filtering. Adjust inputs.")
+            st.stop()
+
+        qi = np.nanmax(q[:5])
+        D_init = max(decline_pct / 100, 0.01)
+
+        try:
+            if model_type == "Hyperbolic":
+                popt, _ = curve_fit(lambda t, D: hyperbolic(t, qi, D, b_val), t, q, p0=[D_init], bounds=([1e-5], [1.0]), maxfev=20000)
+                D_fit = popt[0]
+                forecast_func = lambda t: hyperbolic(t, qi, D_fit, b_val)
+            else:
+                popt, _ = curve_fit(lambda t, D: exponential(t, qi, D), t, q, p0=[D_init], bounds=([1e-5], [1.0]), maxfev=20000)
+                D_fit = popt[0]
+                forecast_func = lambda t: exponential(t, qi, D_fit)
+        except Exception as e:
+            st.error(f"Curve fitting failed: {e}")
+            st.stop()
+
+        full_days = np.arange(0, int(100 * 365.25))
+        full_years = full_days / 365.25
+        forecast_values = forecast_func(full_years)
+        cum_forecast = np.cumsum(forecast_values)
+        EUR_limit = eur * 1e6
+
+        stop_mask = (forecast_values < cutoff) | (cum_forecast > EUR_limit)
+        stop_mask &= (full_years > t[-1])
+        cutoff_idx = np.argmax(stop_mask) if stop_mask.any() else len(full_days)
+
+        forecast_days = full_days[:cutoff_idx]
+        forecast_q = forecast_values[:cutoff_idx]
+        cum_q = cum_forecast[:cutoff_idx]
+
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['Days'], y=df['Qo (m3/day)'],
-                                 mode='markers+lines', name='Actual Qo',
-                                 marker=dict(color='blue')))
-        fig.update_layout(title='Preview: Actual Oil Rate',
-                          xaxis_title='Days',
-                          yaxis_title='Qo (m³/day)',
-                          hovermode='closest')
+        fig.add_trace(go.Scatter(x=df['Days'], y=df['Qo'], mode='markers+lines', name='Actual Qo'))
+        fig.add_trace(go.Scatter(x=forecast_days + hist['Days'].iloc[0], y=forecast_q, mode='lines', name=f'{model_type} Forecast', line=dict(color='orange', dash='dash')))
+        fig.add_trace(go.Scatter(x=[0, forecast_days[-1] + hist['Days'].iloc[0]], y=[cutoff] * 2, mode='lines', name='Cut‑off', line=dict(color='red', dash='dot')))
+        fig.update_layout(title='Forecast', xaxis_title='Days', yaxis_title='Qo (m³/d)')
         st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("📌 Forecast Settings")
-        start_day = st.number_input("Start Day", min_value=0, value=0)
-        ignore_days_input = st.text_input("Ignore Days (e.g. 200-220, 250)")
-        eur = st.number_input("Estimated Ultimate Recovery (EUR) in million m³", value=86.0)
-        decline_pct = st.slider("Annual Decline Rate (%)", min_value=0.1, max_value=100.0, step=0.1, value=14.0)
-        cutoff = st.number_input("Cutoff Rate (m³/day)", min_value=0.1, max_value=100.0, step=0.1, value=0.5)
-        b_val = st.slider("Hyperbolic Exponent (b)", min_value=0.1, max_value=1.0, step=0.01, value=0.5)
-        model_type = st.radio("Forecast Type", ['Hyperbolic', 'Exponential'])
+        df_forecast = pd.DataFrame({
+            'Days': forecast_days + hist['Days'].iloc[0],
+            'Forecast Qo': forecast_q,
+            'Cum Forecast': cum_q
+        })
 
-        def parse_ignore_input(text):
-            ignore = set()
-            for part in text.split(','):
-                part = part.strip()
-                if '-' in part:
-                    start, end = map(int, part.split('-'))
-                    ignore.update(range(start, end + 1))
-                elif part.isdigit():
-                    ignore.add(int(part))
-            return list(ignore)
-
-        if st.button("🔍 Analyze Forecast"):
-            ignore_days = parse_ignore_input(ignore_days_input)
-            df_filtered = df[df['Days'] >= start_day].copy()
-            if ignore_days:
-                df_filtered = df_filtered[~df_filtered['Days'].isin(ignore_days)]
-
-            # Convert days to years for proper decline rate handling
-            t = (df_filtered['Days'].values - df_filtered['Days'].values[0]) / 365.25
-            q = df_filtered['Qo (m3/day)'].values
-            D_year = decline_pct / 100  # convert to fractional annual rate
-
-            def hyperbolic(t, qi):
-                return qi / ((1 + b_val * D_year * t) ** (1 / b_val))
-
-            def exponential(t, qi):
-                return qi * np.exp(-D_year * t)
-
-            try:
-                if model_type == 'Hyperbolic':
-                    popt, _ = curve_fit(hyperbolic, t, q, p0=[max(q[0], 1)], bounds=([0.1], [10000]), maxfev=10000)
-                    forecast_func = lambda x: hyperbolic(x, *popt)
-                else:
-                    popt, _ = curve_fit(exponential, t, q, p0=[max(q[0], 1)], bounds=([0.1], [10000]), maxfev=10000)
-                    forecast_func = lambda x: exponential(x, *popt)
-
-                # Forecast for 15 years
-                full_days = np.arange(0, int(100 * 365.25))  # Effectively uncapped, stops at cutoff or EUR
-                full_years = full_days / 365.25
-                forecast_values = forecast_func(full_years)
-                cum_forecast = np.cumsum(forecast_values)
-                EUR_limit = eur * 1e6
-                cutoff_idx = np.argmax((forecast_values < cutoff) | (cum_forecast > EUR_limit))
-                if cutoff_idx == 0:
-                    cutoff_idx = len(full_days)
-
-                forecast_df = pd.DataFrame({
-                    'Days': df_filtered['Days'].values[0] + full_days[:cutoff_idx],
-                    f'{model_type} Forecast': forecast_values[:cutoff_idx]
-                })
-
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=df['Days'], y=df['Qo (m3/day)'],
-                                          mode='lines+markers', name='Actual Qo'))
-                fig2.add_trace(go.Scatter(x=forecast_df['Days'], y=forecast_df[f'{model_type} Forecast'],
-                                          mode='lines', name=f'{model_type} Forecast',
-                                          line=dict(color='orange', dash='dash')))
-                fig2.add_trace(go.Scatter(x=[0, forecast_df['Days'].max()], y=[cutoff, cutoff],
-                                          mode='lines', name=f'{cutoff} m³/day Cutoff',
-                                          line=dict(color='red', dash='dot')))
-                fig2.update_layout(title=f'{model_type} Forecast Result',
-                                   xaxis_title='Days',
-                                   yaxis_title='Qo (m³/day)',
-                                   hovermode='closest')
-                st.plotly_chart(fig2, use_container_width=True)
-
-                df_export = pd.merge_asof(df[['Days', 'Qo (m3/day)', 'CumOil (m3)', 'Month']],
-                                          forecast_df, on='Days', direction='nearest')
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_export.to_excel(writer, index=False, sheet_name='Forecast')
-                st.download_button("📥 Download Forecast Excel", data=output.getvalue(),
-                                   file_name="Well_Forecast_Output.xlsx")
-            except Exception as e:
-                st.error(f"Forecasting failed: {e}")
-    except Exception as e:
-        st.error(f"File processing failed: {e}")
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
+            hist.to_excel(writer, index=False, sheet_name='Historical')
+            df_forecast.to_excel(writer, index=False, sheet_name='Forecast')
+        st.download_button("📥 Download Forecast Excel", data=out.getvalue(), file_name="DCA_Forecast.xlsx")
