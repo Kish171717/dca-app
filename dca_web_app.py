@@ -41,7 +41,7 @@ if uploaded_file:
         start_day = st.number_input("Start Day", min_value=0, value=0)
         ignore_days_input = st.text_input("Ignore Days (e.g. 200-220, 250)")
         eur = st.number_input("Estimated Ultimate Recovery (EUR) in million m³", value=86.0)
-        decline_pct = st.slider("Decline Rate (%)", min_value=0.1, max_value=100.0, step=0.1, value=14.0)
+        decline_pct = st.slider("Annual Decline Rate (%)", min_value=0.1, max_value=100.0, step=0.1, value=14.0)
         cutoff = st.number_input("Cutoff Rate (m³/day)", min_value=0.1, max_value=100.0, step=0.1, value=0.5)
         b_val = st.slider("Hyperbolic Exponent (b)", min_value=0.1, max_value=1.0, step=0.01, value=0.5)
         model_type = st.radio("Forecast Type", ['Hyperbolic', 'Exponential'])
@@ -57,33 +57,35 @@ if uploaded_file:
                     ignore.add(int(part))
             return list(ignore)
 
-        def hyperbolic(t, qi, D, b):
-            return qi / ((1 + b * D * t) ** (1 / b))
-
-        def exponential(t, qi, D):
-            return qi * np.exp(-D * t)
-
         if st.button("🔍 Analyze Forecast"):
             ignore_days = parse_ignore_input(ignore_days_input)
             df_filtered = df[df['Days'] >= start_day].copy()
             if ignore_days:
                 df_filtered = df_filtered[~df_filtered['Days'].isin(ignore_days)]
 
-            t = df_filtered['Days'].values - df_filtered['Days'].values[0]
+            # Convert days to years for proper decline rate handling
+            t = (df_filtered['Days'].values - df_filtered['Days'].values[0]) / 365.25
             q = df_filtered['Qo (m3/day)'].values
-            decline_rate = decline_pct / 100
+            D_year = decline_pct / 100  # convert to fractional annual rate
+
+            def hyperbolic(t, qi):
+                return qi / ((1 + b_val * D_year * t) ** (1 / b_val))
+
+            def exponential(t, qi):
+                return qi * np.exp(-D_year * t)
+
             try:
                 if model_type == 'Hyperbolic':
-                    popt, _ = curve_fit(hyperbolic, t, q, p0=[max(q[0], 1), max(decline_rate, 0.001), b_val],
-                                        bounds=([0.1, 0.0001, 0.01], [10000, 1.0, 0.99]), maxfev=10000)
+                    popt, _ = curve_fit(hyperbolic, t, q, p0=[max(q[0], 1)], bounds=([0.1], [10000]), maxfev=10000)
                     forecast_func = lambda x: hyperbolic(x, *popt)
                 else:
-                    popt, _ = curve_fit(exponential, t, q, p0=[max(q[0], 1), max(decline_rate, 0.001)],
-                                        bounds=([0.1, 0.0001], [10000, 1.0]), maxfev=10000)
+                    popt, _ = curve_fit(exponential, t, q, p0=[max(q[0], 1)], bounds=([0.1], [10000]), maxfev=10000)
                     forecast_func = lambda x: exponential(x, *popt)
 
-                full_days = np.arange(0, 15*365)
-                forecast_values = forecast_func(full_days)
+                # Forecast for 15 years
+                full_days = np.arange(0, int(15 * 365.25))
+                full_years = full_days / 365.25
+                forecast_values = forecast_func(full_years)
                 cum_forecast = np.cumsum(forecast_values)
                 EUR_limit = eur * 1e6
                 cutoff_idx = np.argmax((forecast_values < cutoff) | (cum_forecast > EUR_limit))
