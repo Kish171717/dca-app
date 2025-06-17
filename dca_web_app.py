@@ -104,7 +104,9 @@ if uploaded:
         EUR = eur_mcm * 1e6
 
         t_np = t_yrs.to_numpy() if hasattr(t_yrs, 'to_numpy') else np.array(t_yrs)
-        stop = ((qo < cutoff) | (cum > EUR)) & (yrs > t_np[-1])
+        last_hist_year = float(t_yrs.iloc[-1]) if hasattr(t_yrs, "iloc") else float(t_yrs[-1])
+stop = ((qo < cutoff) | (cum > EUR)) & (yrs > last_hist_year)
+
         end = np.argmax(stop) if stop.any() else len(horizon_days)
 
         fd = horizon_days[:end]
