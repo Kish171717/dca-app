@@ -21,116 +21,112 @@ run_btn   = st.button("🔍 Forecast")
 
 # ───────── helpers ─────────
 def parse_ignore(txt):
-    out = set()
+    out=set()
     for part in txt.split(','):
-        part = part.strip()
+        part=part.strip()
         if '-' in part:
-            a, b = map(int, part.split('-'))
-            out.update(range(a, b + 1))
+            a,b=map(int,part.split('-')); out.update(range(a,b+1))
         elif part.isdigit():
             out.add(int(part))
     return list(out)
 
-def hyperbolic(t, qi, D, b): return qi / ((1 + b * D * t) ** (1 / b))
-def exponential(t, qi, D): return qi * np.exp(-D * t)
+def hyperbolic(t, qi, D, b): return qi/((1+b*D*t)**(1/b))
+def exponential(t, qi, D):   return qi*np.exp(-D*t)
 
 # ───────── main ─────────
 if file:
-    try:
-        df = pd.read_excel(file)
+    try: df=pd.read_excel(file)
     except Exception as e:
-        st.error(f"Read error: {e}")
-        st.stop()
+        st.error(f"Read error: {e}"); st.stop()
 
-    need = ['Month', 'Oil Production (m3/d)', 'Oil m3']
+    need=['Month','Oil Production (m3/d)','Oil m3']
     if any(c not in df.columns for c in need):
-        st.error(f"Missing columns → found {list(df.columns)}")
-        st.stop()
+        st.error(f"Missing columns → found {list(df.columns)}"); st.stop()
 
-    df['Month'] = pd.to_datetime(df['Month'])
-    df = df.sort_values('Month').reset_index(drop=True)
-    df['Days'] = (df['Month'] - df['Month'].iloc[0]).dt.days
-    df['Qo'] = df['Oil Production (m3/d)']
-    df['CumOil'] = df['Oil m3'].cumsum()
+    df['Month']=pd.to_datetime(df['Month'])
+    df=df.sort_values('Month').reset_index(drop=True)
+    df['Days']=(df['Month']-df['Month'].iloc[0]).dt.days
+    df['Qo']  =df['Oil Production (m3/d)']
+    df['CumOil']=df['Oil m3'].cumsum()
 
     st.plotly_chart(
-        go.Figure(go.Scatter(x=df['Days'], y=df['Qo'], mode='markers+lines', name='Actual Qo'))
-        .update_layout(title="Actual Production", xaxis_title='Days', yaxis_title='Qo (m³/d)'),
+        go.Figure(go.Scatter(x=df['Days'],y=df['Qo'],mode='markers+lines',name='Actual Qo'))
+        .update_layout(title="Actual Production",xaxis_title='Days',yaxis_title='Qo (m³/d)'),
         use_container_width=True)
 
     if run_btn:
-        ignore = parse_ignore(ignore_tx)
-        hist = df[df['Days'] >= start_day].copy()
-        if ignore:
-            hist = hist[~hist['Days'].isin(ignore)]
+        ignore=parse_ignore(ignore_tx)
+        hist=df[df['Days']>=start_day].copy()
+        if ignore: hist=hist[~hist['Days'].isin(ignore)]
 
-        t = (hist['Days'] - hist['Days'].iloc[0]) / 365.25
-        q = hist['Qo'].values
-        m = (q > 0) & ~np.isnan(q)
-        t, q = t[m], q[m]
-        if len(q) < 5:
-            st.warning("Too few valid points")
-            st.stop()
+        # arrays in years
+        t=(hist['Days']-hist['Days'].iloc[0])/365.25
+        q=hist['Qo'].values
+        m=(q>0)&~np.isnan(q); t,q=t[m],q[m]
+        if len(q)<5: st.warning("Too few valid points"); st.stop()
 
-        qi_guess = np.nanmax(q[:5])
-        D_guess = max(decl_pct / 100, 0.01)
+        qi_guess=np.nanmax(q[:5])
+        D_guess=max(decl_pct/100,0.01)
 
         try:
-            if model == "Hyperbolic":
-                popt, _ = curve_fit(hyperbolic, t, q,
-                                    p0=[qi_guess, D_guess, b_user],
-                                    bounds=([0.01, 1e-5, 0.05],
-                                            [q.max() * 10, 5.0, 1.0]),
-                                    maxfev=60000)
-                qi_fit, D_fit, b_fit = popt
-                f = lambda yrs: hyperbolic(yrs, qi_fit, D_fit, b_fit)
+            if model=="Hyperbolic":
+                popt,_=curve_fit(hyperbolic, t, q,
+                                 p0=[qi_guess,D_guess,b_user],
+                                 bounds=([0.01,1e-5,0.05],[q.max()*10,5.0,1.0]),
+                                 maxfev=60000)
+                qi_fit,D_fit,b_fit=popt
+                f=lambda yrs: hyperbolic(yrs,qi_fit,D_fit,b_fit)
             else:
-                popt, _ = curve_fit(exponential, t, q,
-                                    p0=[qi_guess, D_guess],
-                                    bounds=([0.01, 1e-5],
-                                            [q.max() * 10, 5.0]),
-                                    maxfev=60000)
-                qi_fit, D_fit = popt
-                f = lambda yrs: exponential(yrs, qi_fit, D_fit)
+                popt,_=curve_fit(exponential, t, q,
+                                 p0=[qi_guess,D_guess],
+                                 bounds=([0.01,1e-5],[q.max()*10,5.0]),
+                                 maxfev=60000)
+                qi_fit,D_fit=popt
+                f=lambda yrs: exponential(yrs,qi_fit,D_fit)
         except Exception as e:
             st.warning(f"Fit warning → using initial guess ({e})")
-            if model == "Hyperbolic":
-                f = lambda yrs: hyperbolic(yrs, qi_guess, D_guess, b_user)
+            if model=="Hyperbolic":
+                f=lambda yrs: hyperbolic(yrs,qi_guess,D_guess,b_user)
             else:
-                f = lambda yrs: exponential(yrs, qi_guess, D_guess)
+                f=lambda yrs: exponential(yrs,qi_guess,D_guess)
 
-        horizon = np.arange(0, int(100 * 365.25))  # forecast up to 100 yrs
-        yrs = horizon / 365.25
-        qo = f(yrs)
-        cum = np.cumsum(qo)
-        cum_mcm = cum / 1e6                  # 🔧 Convert to million m³
-        EUR = eur_mcm                        # User's EUR input in million m³
+        # 100-year horizon
+        horizon=np.arange(0,int(100*365.25))
+        yrs=horizon/365.25
+        qo=f(yrs); cum=np.cumsum(qo)       # cum in m³
+        cum_mcm=cum/1e6                    # convert to million m³
+        EUR=eur_mcm                        # EUR slider already in million m³
 
-        last_hist = float(t.iloc[-1])
-        stop = ((qo < cutoff) | (cum_mcm > EUR)) & (yrs > last_hist)
-        end = np.argmax(stop) if stop.any() else len(horizon)
+        last_hist=float(t.iloc[-1])
+        stop=((qo<cutoff)|(cum_mcm>EUR)) & (yrs>last_hist)
+        end=np.argmax(stop) if stop.any() else len(horizon)
 
-        fd = horizon[:end]
-        fq = qo[:end]
-        cum = cum[:end]
-        x0 = hist['Days'].iloc[0]
+        fd=horizon[:end]; fq=qo[:end]; cum_seg=cum[:end]; x0=hist['Days'].iloc[0]
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['Days'], y=df['Qo'], mode='markers+lines', name='Actual Qo'))
-        fig.add_trace(go.Scatter(x=fd + x0, y=fq, mode='lines',
+        # Determine stop reason for annotation
+        hit_type = "Cut-off" if fq[-1] < cutoff else "EUR limit"
+
+        fig=go.Figure()
+        fig.add_trace(go.Scatter(x=df['Days'],y=df['Qo'],mode='markers+lines',name='Actual Qo'))
+        fig.add_trace(go.Scatter(x=fd+x0,y=fq,mode='lines',
                                  name=f'{model} Forecast',
-                                 line=dict(color='orange', dash='dash')))
-        fig.add_trace(go.Scatter(x=[0, fd[-1] + x0], y=[cutoff] * 2, mode='lines',
-                                 name='Cut-off', line=dict(color='red', dash='dot')))
-        fig.update_layout(title='Forecast', xaxis_title='Days', yaxis_title='Qo (m³/d)')
-        st.plotly_chart(fig, use_container_width=True)
+                                 line=dict(color='orange',dash='dash')))
+        fig.add_trace(go.Scatter(x=[0,fd[-1]+x0],y=[cutoff]*2,mode='lines',
+                                 name='Cut-off',line=dict(color='red',dash='dot')))
+        # Green dashed vertical line where forecast stops
+        fig.add_vline(x=fd[-1]+x0,line_dash="dash",line_color="green")
+        fig.add_annotation(x=fd[-1]+x0,y=cutoff,
+                           text=f"Stopped by {hit_type}",
+                           showarrow=True,arrowhead=1,ay=-40)
+        fig.update_layout(title='Forecast',xaxis_title='Days',yaxis_title='Qo (m³/d)')
+        st.plotly_chart(fig,use_container_width=True)
 
         # Excel export
-        out = pd.DataFrame({'Days': fd + x0, 'Forecast Qo': fq, 'Cum Forecast': cum})
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
-            hist.to_excel(w, 'Historical', index=False)
-            out.to_excel(w, 'Forecast', index=False)
+        out=pd.DataFrame({'Days':fd+x0,'Forecast Qo':fq,'Cum Forecast (m³)':cum_seg})
+        buf=io.BytesIO()
+        with pd.ExcelWriter(buf,engine='xlsxwriter') as w:
+            hist.to_excel(w,'Historical',index=False)
+            out.to_excel(w,'Forecast',index=False)
         st.download_button("📥 Download Excel",
                            data=buf.getvalue(),
                            file_name='DCA_Forecast.xlsx')
