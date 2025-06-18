@@ -5,194 +5,125 @@ import plotly.graph_objs as go
 from scipy.optimize import curve_fit
 import io
 
-# ─── page setup ────────────────────────────────────────────────────────────
-st.set_page_config(page_title="DCA Forecast Tool", layout="centered")
-st.title("📉 Decline Curve Analysis — Auto vs Manual Forecast")
+st.set_page_config(page_title="DCA Forecast - Auto vs Manual", layout="wide")
+st.title("📊 Decline Curve Analysis: Auto-Fit vs Manual Forecast")
 
-# ─── file upload ───────────────────────────────────────────────────────────
-file = st.file_uploader("Upload Excel (Month, Oil Production (m3/d), Oil m3)", ["xlsx"])
-if not file:
-    st.info("Upload an Excel file to begin.")
+# Upload Excel file
+uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+if not uploaded_file:
     st.stop()
 
+# Read data
 try:
-    df = pd.read_excel(file)
+    df = pd.read_excel(uploaded_file)
+    df = df[["Month", "Oil Production (m3/d)", "Oil m3"]].copy()
+    df["Month"] = pd.to_datetime(df["Month"])
+    df = df.sort_values("Month")
+    df["Days"] = (df["Month"] - df["Month"].iloc[0]).dt.days
+    df["Qo"] = df["Oil Production (m3/d)"]
+    df["CumOil"] = df["Oil m3"].cumsum()
 except Exception as e:
-    st.error(f"Excel read failed: {e}")
+    st.error(f"Error reading file: {e}")
     st.stop()
 
-required = ["Month", "Oil Production (m3/d)", "Oil m3"]
-if any(c not in df.columns for c in required):
-    st.error(f"Missing required columns: {list(df.columns)}")
-    st.stop()
+st.success("✅ File loaded successfully!")
 
-# ─── prep dataframe ────────────────────────────────────────────────────────
-df["Month"] = pd.to_datetime(df["Month"])
-df = df.sort_values("Month").reset_index(drop=True)
-df["Days"] = (df["Month"] - df["Month"].iloc[0]).dt.days
-df["Qo"] = df["Oil Production (m3/d)"]
-df["CumOil"] = df["Oil m3"].cumsum()
+# Forecast Settings
+st.sidebar.header("📌 Forecast Settings")
 
-st.plotly_chart(
-    go.Figure(go.Scatter(x=df["Days"], y=df["Qo"], mode="lines+markers", name="Actual Qo"))
-    .update_layout(title="Historical Production", xaxis_title="Days", yaxis_title="Qo (m³/d)"),
-    use_container_width=True,
-)
+eur_input = st.sidebar.number_input("EUR (Million m³)", value=86.0)
+cutoff = st.sidebar.number_input("Cutoff Qo (m³/d)", value=0.5)
+forecast_years = st.sidebar.slider("Forecast Horizon (years)", 1, 100, 50)
 
-# ─── forecast settings ─────────────────────────────────────────────────────
-st.header("⚙️ Forecast Settings")
-start_day = st.number_input("Start Day", 0, value=0)
-ignore_txt = st.text_input("Ignore Days (e.g. 200-220, 300)")
-eur_mcm = st.number_input("EUR (million m³)", 1.0, 1e4, value=86.0)
-use_cut = st.checkbox("Apply Cut-off?", value=True)
-cutoff_qo = st.number_input("Cut-off Qo (m³/d)", 0.1, 100.0, value=0.5, disabled=not use_cut)
-forecast_yrs = st.slider("Forecast horizon (years)", 1, 100, 50)
+# Auto-fit Initial Guesses
+st.sidebar.subheader("Auto-Fit Initial Guesses")
+init_decline_pct = st.sidebar.slider("Decline % per year", 1.0, 100.0, 14.0)
+init_b = st.sidebar.slider("b (hyperbolic exponent)", 0.1, 1.0, 0.5, step=0.01)
 
-st.subheader("🟠 Auto-fit initial guesses")
-decl_pct_guess = st.slider("Initial Decline guess (%/yr)", 0.1, 100.0, 14.0, 0.1)
-b_guess = st.slider("Initial b guess (hyperbolic)", 0.05, 1.0, 0.5, 0.01)
-model_type = st.radio("Model", ["Hyperbolic", "Exponential"])
+# Manual Forecast Inputs
+st.sidebar.subheader("Manual Forecast Settings")
+manual_qi = st.sidebar.number_input("Manual qi (initial rate)", value=100.0)
+manual_decline_pct = st.sidebar.slider("Manual Decline % per year", 1.0, 100.0, 10.0)
+manual_b = st.sidebar.slider("Manual b (hyperbolic)", 0.1, 1.0, 0.5, step=0.01)
 
-st.subheader("🔵 Manual forecast parameters")
-manual_qi = st.number_input("Manual Initial Qo (m³/d)", 0.1, 10000.0, step=0.1)
-manual_decl_pct = st.slider("Manual Decline %/yr", 0.1, 100.0, 20.0, 0.1)
-manual_b = st.slider("Manual b (hyperbolic)", 0.05, 1.0, 0.5, 0.01)
+run_btn = st.sidebar.button("🔍 Run Forecast")
 
-run_btn = st.button("🔍 Run Forecast")
-
-# ─── helper functions ──────────────────────────────────────────────────────
-def parse_ignore(txt):
-    out = set()
-    for part in txt.split(","):
-        part = part.strip()
-        if "-" in part:
-            a, b = map(int, part.split("-"))
-            out.update(range(a, b + 1))
-        elif part.isdigit():
-            out.add(int(part))
-    return out
-
-def hyperbolic(t, qi, D, b):  # t in years
-    return qi / ((1 + b * D * t) ** (1 / b))
+# Forecast formulas
+def hyperbolic(t, qi, D, b):
+    return qi / (1 + b * D * t)**(1/b)
 
 def exponential(t, qi, D):
     return qi * np.exp(-D * t)
 
-# ─── forecast computation ──────────────────────────────────────────────────
+# Forecasting block
 if run_btn:
+    forecast_days = int(forecast_years * 365.25)
+    horizon = np.arange(forecast_days)
+    years = horizon / 365.25
+    t0 = df["Days"].iloc[0]
 
-    # Filter historical data
-    ignore = parse_ignore(ignore_txt)
-    hist = df[df["Days"] >= start_day].copy()
-    if ignore:
-        hist = hist[~hist["Days"].isin(ignore)]
+    # Prepare data for curve fitting
+    fit_df = df[df["Qo"] > 0].copy()
+    t_fit = (fit_df["Days"] - fit_df["Days"].iloc[0]) / 365.25
+    q_fit = fit_df["Qo"].values
+    qi_guess = q_fit[0]
+    D_guess = init_decline_pct / 100
 
-    if len(hist) < 3:
-        st.warning("Too few data points after filtering.")
-        st.stop()
-
-    t0 = hist["Days"].iloc[0]
-    t_hist_yrs = (hist["Days"] - t0) / 365.25
-    q_hist = hist["Qo"].values
-    mask = (q_hist > 0) & ~np.isnan(q_hist)
-    t_hist_yrs, q_hist = t_hist_yrs[mask], q_hist[mask]
-
-    if len(q_hist) < 3:
-        st.warning("Filtered data too small.")
-        st.stop()
-
-    # ── Auto-fit forecast ────────────────────────────────────────────────
-    qi_guess = q_hist[0]
-    D_guess = max(decl_pct_guess / 100, 0.01)
-
+    # Fit curve
     try:
-        if model_type == "Hyperbolic":
-            popt, _ = curve_fit(
-                hyperbolic, t_hist_yrs, q_hist,
-                p0=[qi_guess, D_guess, b_guess],
-                bounds=([0.01, 1e-5, 0.05],
-                        [q_hist.max()*10, 5.0, 1.0]),
-                maxfev=60000
-            )
-            qi_fit, D_fit, b_fit = popt
-            auto_fun = lambda yrs: hyperbolic(yrs, qi_fit, D_fit, b_fit)
-        else:
-            popt, _ = curve_fit(
-                exponential, t_hist_yrs, q_hist,
-                p0=[qi_guess, D_guess],
-                bounds=([0.01, 1e-5],
-                        [q_hist.max()*10, 5.0]),
-                maxfev=60000
-            )
-            qi_fit, D_fit = popt
-            auto_fun = lambda yrs: exponential(yrs, qi_fit, D_fit)
-    except Exception as e:
-        st.warning(f"Auto-fit failed: {e} — using guesses.")
-        auto_fun = lambda yrs: hyperbolic(yrs, qi_guess, D_guess, b_guess) \
-            if model_type == "Hyperbolic" else \
-            lambda yrs: exponential(yrs, qi_guess, D_guess)
+        popt, _ = curve_fit(hyperbolic, t_fit, q_fit, p0=[qi_guess, D_guess, init_b])
+        qi_fit, D_fit, b_fit = popt
+        qo_auto = hyperbolic(years, qi_fit, D_fit, b_fit)
+    except:
+        qo_auto = hyperbolic(years, qi_guess, D_guess, init_b)
 
-    # ── Manual forecast function ─────────────────────────────────────────
-    D_manual = manual_decl_pct / 100
-    manual_fun = lambda yrs: hyperbolic(yrs, manual_qi, D_manual, manual_b) \
-        if model_type == "Hyperbolic" else \
-        lambda yrs: exponential(yrs, manual_qi, D_manual)
+    # Apply cutoff & EUR
+    cum_auto = np.cumsum(qo_auto) / 1e6
+    stop_auto = (qo_auto < cutoff) | (cum_auto > eur_input)
+    stop_idx_auto = np.argmax(stop_auto) if stop_auto.any() else len(qo_auto)
 
-    # ── Generate horizon & both forecasts ───────────────────────────────
-    horizon = np.arange(0, int(forecast_yrs * 365.25))
-    yrs = horizon / 365.25
+    # Manual forecast
+    D_manual = manual_decline_pct / 100
+    qo_manual = hyperbolic(years, manual_qi, D_manual, manual_b)
+    cum_manual = np.cumsum(qo_manual) / 1e6
+    stop_manual = (qo_manual < cutoff) | (cum_manual > eur_input)
+    stop_idx_manual = np.argmax(stop_manual) if stop_manual.any() else len(qo_manual)
 
-    qo_auto = auto_fun(yrs)
-    qo_man  = manual_fun(yrs)
+    # Graph 1 – Auto
+    st.subheader("📈 Forecast Graph 1: Auto-Fit")
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter(x=df["Days"], y=df["Qo"], mode="lines+markers", name="Actual"))
+    fig1.add_trace(go.Scatter(x=horizon[:stop_idx_auto], y=qo_auto[:stop_idx_auto],
+                              mode="lines", name="Auto Forecast", line=dict(color="orange", dash="dash")))
+    fig1.add_shape(type="line", x0=horizon[stop_idx_auto], x1=horizon[stop_idx_auto],
+                   y0=0, y1=max(qo_auto), line=dict(color="orange", dash="dot"))
+    fig1.update_layout(xaxis_title="Days", yaxis_title="Qo (m³/d)")
+    st.plotly_chart(fig1, use_container_width=True)
 
-    def apply_stop(qo):
-        cum_m3  = np.cumsum(qo)
-        cum_mcm = cum_m3 / 1e6
-        stop = cum_mcm > eur_mcm
-        if use_cut:
-            stop |= (qo < cutoff_qo)
-        stop_idx = np.argmax(stop) if stop.any() else len(qo)
-        return stop_idx, cum_m3
+    # Graph 2 – Manual
+    st.subheader("📘 Forecast Graph 2: Manual Forecast")
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(x=df["Days"], y=df["Qo"], mode="lines+markers", name="Actual"))
+    fig2.add_trace(go.Scatter(x=horizon[:stop_idx_manual], y=qo_manual[:stop_idx_manual],
+                              mode="lines", name="Manual Forecast", line=dict(color="blue", dash="dot")))
+    fig2.add_shape(type="line", x0=horizon[stop_idx_manual], x1=horizon[stop_idx_manual],
+                   y0=0, y1=max(qo_manual), line=dict(color="blue", dash="dot"))
+    fig2.update_layout(xaxis_title="Days", yaxis_title="Qo (m³/d)")
+    st.plotly_chart(fig2, use_container_width=True)
 
-    idx_auto, cum_auto = apply_stop(qo_auto)
-    idx_man,  cum_man  = apply_stop(qo_man)
-
-    # ── Plot ─────────────────────────────────────────────────────────────
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["Days"], y=df["Qo"], mode="lines+markers", name="Actual Qo"))
-    # Auto
-    fig.add_trace(go.Scatter(x=horizon[:idx_auto] + t0, y=qo_auto[:idx_auto],
-                             mode="lines", name="Auto Forecast", line=dict(color="orange", dash="dash")))
-    fig.add_vline(x=horizon[idx_auto-1] + t0, line_dash="dash", line_color="orange")
-    # Manual
-    fig.add_trace(go.Scatter(x=horizon[:idx_man] + t0, y=qo_man[:idx_man],
-                             mode="lines", name="Manual Forecast", line=dict(color="blue", dash="dot")))
-    fig.add_vline(x=horizon[idx_man-1] + t0, line_dash="dot", line_color="blue")
-    # Cutoff line
-    if use_cut:
-        fig.add_trace(go.Scatter(x=[0, max(horizon[idx_auto-1], horizon[idx_man-1]) + t0],
-                                 y=[cutoff_qo]*2, mode="lines", name="Cut-off",
-                                 line=dict(color="red", dash="dot")))
-    fig.update_layout(title="Auto vs Manual Forecast", xaxis_title="Days", yaxis_title="Qo (m³/d)")
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ── Excel export ────────────────────────────────────────────────────
-    out_auto = pd.DataFrame({
-        "Days": horizon[:idx_auto] + t0,
-        "Auto Forecast Qo": qo_auto[:idx_auto],
-        "Cum Forecast Auto (m³)": cum_auto[:idx_auto]
-    })
-    out_man = pd.DataFrame({
-        "Days": horizon[:idx_man] + t0,
-        "Manual Forecast Qo": qo_man[:idx_man],
-        "Cum Forecast Manual (m³)": cum_man[:idx_man]
+    # Excel output
+    result_df = pd.DataFrame({
+        "Days": horizon[:max(stop_idx_auto, stop_idx_manual)],
+        "Auto Qo": qo_auto[:max(stop_idx_auto, stop_idx_manual)],
+        "Cum Auto (M m³)": cum_auto[:max(stop_idx_auto, stop_idx_manual)],
+        "Manual Qo": qo_manual[:max(stop_idx_auto, stop_idx_manual)],
+        "Cum Manual (M m³)": cum_manual[:max(stop_idx_auto, stop_idx_manual)],
     })
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        hist.to_excel(writer, sheet_name="Historical", index=False)
-        out_auto.to_excel(writer, sheet_name="Auto Forecast", index=False)
-        out_man.to_excel(writer, sheet_name="Manual Forecast", index=False)
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name="Historical", index=False)
+        result_df.to_excel(writer, sheet_name="Forecasts", index=False)
 
-    st.download_button("📥 Download Excel", buf.getvalue(), "DCA_Forecast.xlsx",
-                       mime="application/vnd.ms-excel")
+    st.download_button("📥 Download Forecasts", buffer.getvalue(), file_name="Forecast_Output.xlsx")
+
