@@ -33,6 +33,7 @@ df["Days"] = (df["Month"] - df["Month"].iloc[0]).dt.days
 df["Qo"] = df["Oil Production (m3/d)"]
 df["CumOil"] = df["Oil m3"].cumsum()
 
+# ─── historical graph ──────────────────────────────────────────────────────
 st.plotly_chart(
     go.Figure(go.Scatter(x=df["Days"], y=df["Qo"], mode="lines+markers", name="Actual Qo"))
     .update_layout(title="Historical Production", xaxis_title="Days", yaxis_title="Qo (m³/d)"),
@@ -101,7 +102,7 @@ if run_btn:
         st.warning("Filtered data too small.")
         st.stop()
 
-    # ── Auto-fit forecast ────────────────────────────────────────────────
+    # Auto-fit
     qi_guess = q_hist[0]
     D_guess = max(decl_pct_guess / 100, 0.01)
 
@@ -132,13 +133,12 @@ if run_btn:
             if model_type == "Hyperbolic" else \
             lambda yrs: exponential(yrs, qi_guess, D_guess)
 
-    # ── Manual forecast function ─────────────────────────────────────────
+    # Manual forecast
     D_manual = manual_decl_pct / 100
     manual_fun = lambda yrs: hyperbolic(yrs, manual_qi, D_manual, manual_b) \
         if model_type == "Hyperbolic" else \
         lambda yrs: exponential(yrs, manual_qi, D_manual)
 
-    # ── Generate horizon & both forecasts ───────────────────────────────
     horizon = np.arange(0, int(forecast_yrs * 365.25))
     yrs = horizon / 365.25
 
@@ -151,32 +151,49 @@ if run_btn:
         stop = cum_mcm > eur_mcm
         if use_cut:
             stop |= (qo < cutoff_qo)
-        stop_idx = np.argmax(stop) if stop.any() else len(qo)
-        return stop_idx, cum_m3
+        idx = np.argmax(stop) if stop.any() else len(qo)
+        return idx, cum_m3
 
     idx_auto, cum_auto = apply_stop(qo_auto)
-    idx_man,  cum_man  = apply_stop(qo_man)
+    idx_man, cum_man   = apply_stop(qo_man)
 
-    # ── Plot ─────────────────────────────────────────────────────────────
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["Days"], y=df["Qo"], mode="lines+markers", name="Actual Qo"))
-    # Auto
-    fig.add_trace(go.Scatter(x=horizon[:idx_auto] + t0, y=qo_auto[:idx_auto],
-                             mode="lines", name="Auto Forecast", line=dict(color="orange", dash="dash")))
-    fig.add_vline(x=horizon[idx_auto-1] + t0, line_dash="dash", line_color="orange")
-    # Manual
-    fig.add_trace(go.Scatter(x=horizon[:idx_man] + t0, y=qo_man[:idx_man],
-                             mode="lines", name="Manual Forecast", line=dict(color="blue", dash="dot")))
-    fig.add_vline(x=horizon[idx_man-1] + t0, line_dash="dot", line_color="blue")
-    # Cutoff line
+    # ─── Graph 1 – Auto Forecast ──────────────────────────────────────────
+    st.subheader("🟠 Forecast Graph 1: Auto-Fit")
+    fig_auto = go.Figure()
+    fig_auto.add_trace(go.Scatter(x=df["Days"], y=df["Qo"],
+                                  mode="lines+markers", name="Actual Qo"))
+    fig_auto.add_trace(go.Scatter(x=horizon[:idx_auto] + t0, y=qo_auto[:idx_auto],
+                                  mode="lines", name="Auto Forecast",
+                                  line=dict(color="orange", dash="dash")))
+    fig_auto.add_vline(x=horizon[idx_auto-1] + t0, line_dash="dash", line_color="orange")
     if use_cut:
-        fig.add_trace(go.Scatter(x=[0, max(horizon[idx_auto-1], horizon[idx_man-1]) + t0],
-                                 y=[cutoff_qo]*2, mode="lines", name="Cut-off",
-                                 line=dict(color="red", dash="dot")))
-    fig.update_layout(title="Auto vs Manual Forecast", xaxis_title="Days", yaxis_title="Qo (m³/d)")
-    st.plotly_chart(fig, use_container_width=True)
+        fig_auto.add_trace(go.Scatter(
+            x=[0, horizon[idx_auto-1] + t0],
+            y=[cutoff_qo]*2, mode="lines", name="Cut-off",
+            line=dict(color="red", dash="dot")
+        ))
+    fig_auto.update_layout(xaxis_title="Days", yaxis_title="Qo (m³/d)")
+    st.plotly_chart(fig_auto, use_container_width=True)
 
-    # ── Excel export ────────────────────────────────────────────────────
+    # ─── Graph 2 – Manual Forecast ─────────────────────────────────────────
+    st.subheader("🔵 Forecast Graph 2: Manual")
+    fig_man = go.Figure()
+    fig_man.add_trace(go.Scatter(x=df["Days"], y=df["Qo"],
+                                 mode="lines+markers", name="Actual Qo"))
+    fig_man.add_trace(go.Scatter(x=horizon[:idx_man] + t0, y=qo_man[:idx_man],
+                                 mode="lines", name="Manual Forecast",
+                                 line=dict(color="blue", dash="dot")))
+    fig_man.add_vline(x=horizon[idx_man-1] + t0, line_dash="dot", line_color="blue")
+    if use_cut:
+        fig_man.add_trace(go.Scatter(
+            x=[0, horizon[idx_man-1] + t0],
+            y=[cutoff_qo]*2, mode="lines", name="Cut-off",
+            line=dict(color="red", dash="dot")
+        ))
+    fig_man.update_layout(xaxis_title="Days", yaxis_title="Qo (m³/d)")
+    st.plotly_chart(fig_man, use_container_width=True)
+
+    # ─── Excel export ────────────────────────────────────────────────────
     out_auto = pd.DataFrame({
         "Days": horizon[:idx_auto] + t0,
         "Auto Forecast Qo": qo_auto[:idx_auto],
@@ -194,5 +211,7 @@ if run_btn:
         out_auto.to_excel(writer, sheet_name="Auto Forecast", index=False)
         out_man.to_excel(writer, sheet_name="Manual Forecast", index=False)
 
-    st.download_button("📥 Download Excel", buf.getvalue(), "DCA_Forecast.xlsx",
+    st.download_button("📥 Download Excel",
+                       buf.getvalue(),
+                       "DCA_Forecast.xlsx",
                        mime="application/vnd.ms-excel")
