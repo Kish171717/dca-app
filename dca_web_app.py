@@ -5,7 +5,6 @@ import plotly.graph_objs as go
 from scipy.optimize import curve_fit
 import io
 
-# ─── page setup ────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DCA Forecast Tool", layout="centered")
 st.title("📉 Decline Curve Analysis — Auto vs Manual Forecast")
 
@@ -97,6 +96,7 @@ if run_btn:
     # ─── Auto-fit model ───────────────────────────────────────────────────
     qi_guess = q_hist[0]
     D_guess  = decl_pct_guess / 100
+    D_fit, b_fit = None, None  # placeholders
 
     try:
         if model_type == "Hyperbolic":
@@ -117,6 +117,7 @@ if run_btn:
         st.warning(f"Auto-fit failed → using guesses ({e})")
         auto_fun = lambda y: hyperbolic(y, qi_guess, D_guess, b_guess) \
             if model_type=="Hyperbolic" else lambda y: exponential(y, qi_guess, D_guess)
+        D_fit, b_fit = D_guess, (b_guess if model_type=="Hyperbolic" else None)
 
     # ─── Manual hyperbolic model ──────────────────────────────────────────
     D_manual = manual_decl_pct / 100
@@ -138,8 +139,13 @@ if run_btn:
     idx_auto, cum_auto = trim(qo_auto)
     idx_man , cum_man  = trim(qo_man)
 
+    # Auto-fit decline info
+    fitted_decl_pct = round(D_fit*100, 2)
+    fitted_b_txt = f", b = {round(b_fit,3)}" if b_fit is not None else ""
+    auto_header = f"🟠 Graph 1 – Auto-Fit Forecast (D = {fitted_decl_pct}%/yr{fitted_b_txt})"
+    st.subheader(auto_header)
+
     # ─── Graph 1 – Auto ───────────────────────────────────────────────────
-    st.subheader("🟠 Graph 1 – Auto-Fit Forecast")
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(x=df["Days"], y=df["Qo"], mode="lines+markers", name="Actual"))
     fig1.add_trace(go.Scatter(
